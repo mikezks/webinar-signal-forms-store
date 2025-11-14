@@ -51,9 +51,9 @@ export class FlightCardComponent {
   blink = injectCdBlink();
 
   @Input() item?: Flight;
+  @Output() itemChange = new EventEmitter<Flight>();
   @Input() selected = false;
   @Output() selectedChange = new EventEmitter<boolean>();
-  @Output() delayTrigger = new EventEmitter<Flight>();
 
   toggleSelection(): void {
     this.selected = !this.selected;
@@ -61,6 +61,6 @@ export class FlightCardComponent {
   }
 
   delay(): void {
-    this.delayTrigger.emit(this.item);
+    this.itemChange.emit(this.item);
   }
 }
