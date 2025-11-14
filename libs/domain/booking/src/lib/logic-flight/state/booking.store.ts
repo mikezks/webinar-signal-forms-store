@@ -1,54 +1,101 @@
-import { patchState, signalStore, withComputed, withHooks, withMethods, withProps, withState } from '@ngrx/signals';
-import { rxMethod } from '@ngrx/signals/rxjs-interop';
-import { tapResponse } from '@ngrx/operators';
+import { computed, inject } from '@angular/core';
+import { addMinutes, delegated } from '@flight-demo/shared/core';
+import { mapResponse } from '@ngrx/operators';
+import { signalStore, type, withComputed, withMethods, withProps, withState } from '@ngrx/signals';
+import { entityConfig, removeAllEntities, setAllEntities, updateEntity, upsertEntity, withEntities } from '@ngrx/signals/entities';
+import { Events, injectDispatch, on, withEffects, withReducer } from '@ngrx/signals/events';
+import { switchMap } from 'rxjs';
+import { FlightService } from '../data-access/flight.service';
 import { Flight } from '../model/flight';
 import { FlightFilter } from '../model/flight-filter';
-import { pipe, switchMap } from 'rxjs';
-import { inject } from '@angular/core';
-import { FlightService } from '../data-access/flight.service';
-import { selectFilteredFlights } from './redux/selectors';
+import { flightEvents } from './flight.events';
+
+
+export interface BookingState {
+  filter: FlightFilter;
+  basket: Record<number, boolean>;
+}
+
+export const initialBookingState: BookingState = {
+  filter: {
+    from: 'New York',
+    to: 'Paris',
+    urgent: false
+  },
+  basket: {
+    3: true,
+    5: true,
+  },
+};
+
+export const flightConfig = entityConfig({
+  entity: type<Flight>(),
+  collection: 'flight',
+  // selectId: flight => flight.id
+});
+
 
 export const BookingStore = signalStore(
   { providedIn: 'root' },
-  withState({
-    filter: {
-      from: 'New York',
-      to: 'Paris',
-      urgent: false
-    },
-    basket: {
-      3: true,
-      5: true
-    } as Record<number, boolean>,
-    flights: [] as Flight[]
-  }),
+  // State
+  withState(initialBookingState),
+  withEntities(flightConfig),
+  // Dependency Injection Tokens
   withProps(() => ({
-    _flightService: inject(FlightService)
+    _events: inject(Events),
+    _flightEvents: injectDispatch(flightEvents),
+    _flightService: inject(FlightService),
   })),
-  withMethods(store => ({
-    setFilter: (filter: FlightFilter) =>
-      patchState(store, { filter }),
-    updateBasket: (id: number, selected: boolean) =>
-      patchState(store, state => ({ basket: {
-        ...state.basket,
-        [id]: selected
-    }})),
-    setFlights: (flights: Flight[]) =>
-      patchState(store, { flights }),
+  // Derived State
+  withComputed(store => ({
+    delayedFlights: computed(
+      () => store.flightEntities().filter(flight => flight.delayed)
+    ),
   })),
+  // Public Writable State Facade
   withMethods(store => ({
-    loadFlights: rxMethod<FlightFilter>(pipe(
-      switchMap(filter => store._flightService.find(
-        filter.from, filter.to, filter.urgent
-      ).pipe(
-        tapResponse({
-          next: flights => store.setFlights(flights),
-          error: err => console.error(err)
+    writableFilter: delegated(
+      store.filter,
+      store._flightEvents.flightFilterChanged
+    ),
+    createFlightWithDelayUpdater: (flight: Flight) => delegated(
+      () => flight,
+      () => store._flightEvents.flightDelayTriggered({
+        id: flight.id
+      })
+    ),
+    createBasketSelection: (id: number) => delegated(
+      () => store.basket()[id],
+      selected => store._flightEvents.flightSelectionChanged(
+        { id, selected }
+      )
+    ),
+  })),
+  // Updaters
+  withReducer(
+    on(flightEvents.flightFilterChanged, ({ payload: filter }) => ({ filter })),
+    on(flightEvents.flightSelectionChanged, ({ payload: { id, selected }}, state) => ({
+      basket: { ...state.basket, [id]: selected }
+    })),
+    on(flightEvents.flightUpdated, ({ payload: flight }) =>
+      upsertEntity(flight, flightConfig)),
+    on(flightEvents.flightsLoaded, ({ payload: flights }) =>
+      setAllEntities(flights, flightConfig)),
+    on(flightEvents.flightDelayTriggered, ({ payload: { id, min }}) =>
+      updateEntity({ id, changes:
+        flight => ({ ...flight, date: addMinutes(flight.date, min || 5) })
+      }, flightConfig)),
+    on(flightEvents.flightsResetTriggered, () => removeAllEntities(flightConfig)),
+  ),
+  // Side-Effects
+  withEffects(({ _events, _flightService }) => ({
+    loadFlights$: _events
+      .on(flightEvents.flightFilterChanged).pipe(
+        switchMap(({ payload: { from, to, urgent }}) => _flightService.find(from, to, urgent)),
+        mapResponse({
+          next: flights => flightEvents.flightsLoaded(flights),
+          error: err => flightEvents.flightsLoadedError({ error: err })
         })
-      ))
-    )),
+      ),
   })),
-  withHooks(store => ({
-    onInit: () => store.loadFlights(store.filter),
-  }))
-)
+);
