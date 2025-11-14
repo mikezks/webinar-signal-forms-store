@@ -1,7 +1,7 @@
 import { CommonModule } from '@angular/common';
-import { Component, computed, effect, signal, untracked } from '@angular/core';
+import { Component, computed, effect, inject, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Flight, injectTicketsFacade } from '../../logic-flight';
+import { BookingStore, Flight, injectTicketsFacade } from '../../logic-flight';
 import { FlightCardComponent, FlightFilterComponent } from '../../ui-flight';
 
 
@@ -17,6 +17,7 @@ import { FlightCardComponent, FlightFilterComponent } from '../../ui-flight';
 })
 export class FlightSearchComponent {
   private ticketsFacade = injectTicketsFacade();
+  private store = inject(BookingStore);
 
   protected filter = signal({
     from: 'London',
@@ -39,6 +40,16 @@ export class FlightSearchComponent {
       this.filter();
       untracked(() => this.search());
     });
+
+    this.store.loadFlights({
+      from: 'Paris',
+      to: 'Graz',
+      urgent: false
+    });
+
+    // this.store.loadFlights()
+
+    this.store.flights()
   }
 
   protected search(): void {
